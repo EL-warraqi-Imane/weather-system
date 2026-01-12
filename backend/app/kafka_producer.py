@@ -14,7 +14,7 @@ class KafkaProducer:
         self.topic_historical = "weather-historical-data"
         self.topic_predictions = "weather-predictions"
     
-    async def initialize(self, bootstrap_servers: str = "kafka:9092"):
+    async def initialize(self, bootstrap_servers: str = "localhost:9092"):
         """Initialise le producteur Kafka"""
         try:
             self.producer = AIOKafkaProducer(

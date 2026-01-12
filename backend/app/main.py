@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import uuid
 import asyncio
-
+import numpy as np
 from app.schemas import *
 from app.model_loader import WeatherModel
 from app.kafka_producer import KafkaProducer
 from app.database import DatabaseService
 from app.cache import RedisCache
-
+import math
 # Variables globales
 weather_model = WeatherModel()
 kafka_producer = KafkaProducer()
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     # Charger le modèle
     try:
         weather_model.load_model(
-            model_path="models/best_transformer_weather.pth",
+            model_path="models/transformer_best.pth",
             scaler_x_path="models/scaler_x_transformer.pkl",
             scaler_y_path="models/scaler_y_transformer.pkl",
             device="cpu"

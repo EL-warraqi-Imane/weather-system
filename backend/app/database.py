@@ -18,8 +18,8 @@ class DatabaseService:
     
     @classmethod
     async def initialize(cls, 
-                        host: str = "postgres",
-                        port: int = 5432,
+                        host: str = "localhost",
+                        port: int = 5555,
                         database: str = "weather",
                         user: str = "admin",
                         password: str = "admin123"):

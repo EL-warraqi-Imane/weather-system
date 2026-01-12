@@ -1,5 +1,5 @@
 -- Base de données météo
-CREATE DATABASE IF NOT EXISTS weather;
+-- CREATE DATABASE IF NOT EXISTS weather;
 
 \c weather;
 

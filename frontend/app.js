@@ -19,45 +19,27 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============ FONCTIONS DE CONNEXION API ============
 
 async function makeApiCall(endpoint, method = 'GET', data = null) {
-    const headers = {
-        'Content-Type': 'application/json',
-    };
-    
-    if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
-    }
-    
-    const config = {
-        method: method,
-        headers: headers,
-    };
-    
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+    const config = { method, headers };
     if (data && (method === 'POST' || method === 'PUT')) {
         config.body = JSON.stringify(data);
     }
-    
+
     try {
         const response = await fetch(`${API_URL}${endpoint}`, config);
-        
-        if (response.status === 401) {
-            // Token invalide ou expiré
-            logout();
-            throw new Error('Session expirée');
-        }
-        
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || 'Erreur API');
         }
-        
         return await response.json();
     } catch (error) {
         console.error('API Error:', error);
-        showNotification(`Erreur: ${error.message}`, 'error');
+        showNotification(error.message, 'error');
         throw error;
     }
 }
-
 // ============ FONCTIONS D'AUTHENTIFICATION ============
 
 async function register() {

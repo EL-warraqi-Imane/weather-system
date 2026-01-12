@@ -57,8 +57,8 @@ class WeatherModel:
             
             # Charger le modèle
             logger.info("Chargement des poids du modèle...")
-            checkpoint = torch.load(model_path, map_location=self.device)
-            
+            # checkpoint = torch.load(model_path, map_location=self.device)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
             # Créer l'architecture du modèle
             from app.model_architecture import WeatherTransformer
             self.model = WeatherTransformer(
@@ -70,8 +70,12 @@ class WeatherModel:
             ).to(self.device)
             
             # Charger les poids
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
+            # self.model.load_state_dict(checkpoint['model_state_dict'])
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+             self.model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+              self.model.load_state_dict(checkpoint) # <--- C'est cette ligne qui va sauver ton projet
+              self.model.eval()
             
             self.is_loaded = True
             logger.info("✅ Modèle chargé avec succès!")

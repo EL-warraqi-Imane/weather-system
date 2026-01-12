@@ -28,10 +28,10 @@ class RedisCache:
     
     @classmethod
     async def initialize(cls, 
-                        host: str = "redis",
+                        host: str = "localhost",
                         port: int = 6379,
                         db: int = 0,
-                        password: Optional[str] = None):
+                        password: Optional[str] = None):  
         """Initialize Redis connection"""
         try:
             cls._client = redis.Redis(
