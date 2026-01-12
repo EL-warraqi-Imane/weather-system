@@ -60,22 +60,20 @@ class WeatherModel:
             # checkpoint = torch.load(model_path, map_location=self.device)
             checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
             # Créer l'architecture du modèle
-            from app.model_architecture import WeatherTransformer
-            self.model = WeatherTransformer(
-                input_dim=len(self.FEATURES),
-                d_model=128,
-                nhead=8,
-                num_layers=4,
-                output_dim=len(self.TARGETS)
+            from app.model_architecture import RNNModel
+            self.model = RNNModel(
+                mode="gru",  # Ton init attend 'mode'
+                in_dim=len(self.FEATURES),
+                out_dim=len(self.TARGETS)
             ).to(self.device)
             
             # Charger les poids
-            # self.model.load_state_dict(checkpoint['model_state_dict'])
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-             self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.model.load_state_dict(checkpoint['model_state_dict'])
             else:
-              self.model.load_state_dict(checkpoint) # <--- C'est cette ligne qui va sauver ton projet
-              self.model.eval()
+                self.model.load_state_dict(checkpoint)
+            
+            self.model.eval()
             
             self.is_loaded = True
             logger.info("✅ Modèle chargé avec succès!")
@@ -162,7 +160,7 @@ class WeatherModel:
                 
                 # Calculer le score de confiance
                 results['confidence'] = self._calculate_confidence(input_sequence)
-                results['model_version'] = 'transformer-v1.0'
+                results['model_version'] = 'gru-v1.0'
                 results['timestamp'] = datetime.now().isoformat()
                 
                 return results

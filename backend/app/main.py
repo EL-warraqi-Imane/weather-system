@@ -12,6 +12,8 @@ from app.kafka_producer import KafkaProducer
 from app.database import DatabaseService
 from app.cache import RedisCache
 import math
+import pandas as pd
+from sqlalchemy import create_engine, Integer
 # Variables globales
 weather_model = WeatherModel()
 kafka_producer = KafkaProducer()
@@ -27,7 +29,7 @@ async def lifespan(app: FastAPI):
     # Charger le modèle
     try:
         weather_model.load_model(
-            model_path="models/transformer_best.pth",
+            model_path="models/gru_best.pth",
             scaler_x_path="models/scaler_x_transformer.pkl",
             scaler_y_path="models/scaler_y_transformer.pkl",
             device="cpu"
@@ -39,6 +41,8 @@ async def lifespan(app: FastAPI):
     await kafka_producer.initialize()
     await db_service.initialize()
     await redis_cache.initialize()
+    await db_service.bulk_insert_stations()
+    
     
     print("✅ Application démarrée avec succès")
     
@@ -236,6 +240,15 @@ async def generate_historical(data_request: HistoricalDataRequest):
     }
 
 # Endpoint pour l'historique des prédictions
+# À ajouter avec les autres endpoints @app.get
+@app.get("/api/stations", response_model=List[Dict])
+async def get_stations():
+    """Récupère la liste des 150 stations météo"""
+    stations = await db_service.get_all_stations()
+    if not stations:
+        # Si la table est vide, on retourne une liste vide
+        return []
+    return stations
 @app.get("/api/predictions")
 async def get_predictions(limit: int = 10, offset: int = 0):
     """Récupère l'historique des prédictions"""

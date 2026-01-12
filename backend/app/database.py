@@ -56,6 +56,13 @@ class DatabaseService:
             async with cls._pool.acquire() as conn:
                 # Create predictions table
                 await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS weather_stations (
+                        id SERIAL PRIMARY KEY,
+                        latitude DECIMAL(10, 6) NOT NULL,
+                        longitude DECIMAL(10, 6) NOT NULL
+                    )
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS predictions (
                         id SERIAL PRIMARY KEY,
                         prediction_id VARCHAR(100) UNIQUE NOT NULL,
@@ -121,6 +128,7 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"❌ Error initializing tables: {e}")
             raise
+           
     
     @classmethod
     async def save_prediction(cls, prediction_data: Dict) -> bool:
@@ -297,3 +305,64 @@ class DatabaseService:
         if cls._pool:
             await cls._pool.close()
             logger.info("🔴 Database connections closed")
+    @classmethod
+    async def bulk_insert_stations(cls) -> bool:
+        import pandas as pd
+        import os
+        
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(current_dir, "150pointsconrdinations.csv")
+            
+            async with cls._pool.acquire() as conn:
+                # 1. Vérifier si la table est déjà remplie
+                count = await conn.fetchval("SELECT COUNT(*) FROM weather_stations")
+                if count > 0:
+                    return True
+                
+                if not os.path.exists(file_path):
+                    logger.error(f"❌ Fichier introuvable : {file_path}")
+                    return False
+
+                # 2. Lire le CSV avec ses 4 colonnes réelles
+                # On donne des noms temporaires aux 4 colonnes pour pouvoir les filtrer
+                df = pd.read_csv(
+                    file_path, 
+                    header=None, 
+                    names=['old_id', 'latitude', 'longitude', 'nb_events']
+                )
+                
+                # 3. On ne garde QUE la latitude et la longitude
+                df_final = df[['latitude', 'longitude']].copy()
+                
+                # 4. Nettoyage de sécurité (force les nombres, supprime les lignes vides)
+                df_final['latitude'] = pd.to_numeric(df_final['latitude'], errors='coerce')
+                df_final['longitude'] = pd.to_numeric(df_final['longitude'], errors='coerce')
+                df_final = df_final.dropna()
+
+                # 5. Conversion en liste de tuples pour l'insertion
+                stations_data = list(df_final.itertuples(index=False, name=None))
+
+                # 6. Insertion dans PostgreSQL
+                await conn.copy_records_to_table(
+                    'weather_stations',
+                    records=stations_data,
+                    columns=['latitude', 'longitude']
+                )
+                
+                logger.info(f"✅ {len(stations_data)} stations insérées (Lat/Lon uniquement).")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'insertion automatique : {e}")
+            return False
+    @classmethod
+    async def get_all_stations(cls) -> List[Dict]:
+        """Récupère les stations pour le Producer Kafka"""
+        try:
+            async with cls._pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM weather_stations")
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"❌ Error fetching stations: {e}")
+            return []
