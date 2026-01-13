@@ -286,6 +286,40 @@ async def get_weekly_events(
         "forecasts": forecasts
     }
 
+from expert.expert_service import get_enriched_analysis
+@app.get("/api/v1/expert/analysis")
+async def fetch_risk_analysis(
+    lat: float,
+    lon: float):
+    """
+    Endpoint qui retourne les prédictions Spark enrichies 
+    par le Système Expert (Ontologie).
+    """
+    try:
+        # Appelle le service qui fait : SQL -> KB_ENGINE -> RESULTATS
+        results = await get_enriched_analysis(lat, lon,db_service)
+        
+        if not results:
+            return {
+                "status": "success",
+                "message": "Aucune donnée trouvée pour cette zone.",
+                "data": []
+            }
+            
+        return {
+            "status": "success",
+            "metadata": {
+                "lat": lat,
+                "lon": lon,
+                "unit_system": "metric"
+            },
+            "data": results
+        }
+        
+    except Exception as e:
+        # En cas d'erreur (DB ou moteur KB), on renvoie une erreur 500
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Fonction utilitaire pour générer des données simulées
 # def generate_simulated_historical_data(
 #     target_date: datetime,

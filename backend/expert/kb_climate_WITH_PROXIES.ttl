@@ -1,0 +1,522 @@
+@prefix ex:  <http://example.org/climate#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+###############
+# SCHEMA (minimal but correct)
+###############
+ex:Phenomenon      a owl:Class .
+ex:Rule            a owl:Class .
+ex:Condition       a owl:Class .
+ex:Recommendation  a owl:Class .
+ex:Variable        a owl:Class .
+
+# Object props
+ex:hasRule            a owl:ObjectProperty .
+ex:hasCondition       a owl:ObjectProperty .
+ex:hasRecommendation  a owl:ObjectProperty .
+ex:var                a owl:ObjectProperty .
+
+# Datatype props
+ex:featureKey    a owl:DatatypeProperty .   # string: must match your dataframe column
+ex:op            a owl:DatatypeProperty .   # "GE","GT","LE","LT","BETWEEN","PRESENT"
+ex:minValue      a owl:DatatypeProperty .   # float literal
+ex:maxValue      a owl:DatatypeProperty .   # float literal
+ex:unit          a owl:DatatypeProperty .   # e.g. "C","hPa","mm","cm","mph","kn","in"
+ex:windowHours   a owl:DatatypeProperty .   # int: used when agg="SUM"
+ex:agg           a owl:DatatypeProperty .   # "SUM"
+ex:durationHours a owl:DatatypeProperty .   # int: optional duration requirement
+ex:source        a owl:DatatypeProperty .
+ex:note          a owl:DatatypeProperty .
+ex:text          a owl:DatatypeProperty .
+
+###############
+# VARIABLES (ONLY these are allowed)
+###############
+ex:temperature_2m           a ex:Variable .
+ex:relative_humidity_2m     a ex:Variable .
+ex:surface_pressure         a ex:Variable .
+ex:wind_speed_10m           a ex:Variable .
+ex:wind_gusts_10m           a ex:Variable .
+ex:precipitation            a ex:Variable .
+ex:snowfall                 a ex:Variable .
+ex:soil_moisture_0_to_7cm   a ex:Variable .
+ex:precip_1h_mm             a ex:Variable .
+ex:precip_3h_mm             a ex:Variable .
+ex:precip_6h_mm             a ex:Variable .
+ex:soil_moisture_pctile_30d a ex:Variable .
+
+###############
+# DERIVED VARIABLES (computed from your inputs)
+# heat_index_f  = f(temperature_2m, relative_humidity_2m)
+# wind_chill_f  = f(temperature_2m, wind_speed_10m)
+###############
+ex:heat_index_f a ex:Variable .
+ex:wind_chill_f a ex:Variable .
+
+###############
+# PHENOMENA (events you want the KB to validate)
+###############
+ex:Heavy_Precipitation  a ex:Phenomenon .
+ex:Wind_Event           a ex:Phenomenon .
+ex:Tropical_System      a ex:Phenomenon .
+ex:Winter_Event         a ex:Phenomenon .
+ex:No-Event             a ex:Phenomenon .
+ex:Extreme_Temperature  a ex:Phenomenon .
+
+
+##############################################
+# RULES
+##############################################
+
+# ============================================================
+# Heavy_Precipitation
+# Official intensity-by-rate threshold (heavy rain >= 7.6 mm/h)
+# Source: Environment and Climate Change Canada (MANOBS).
+# Open-Meteo precipitation is the "preceding hour sum" in mm (so it matches mm/h at hourly resolution).
+# ============================================================
+ex:Rule_HeavyPrecip_01 a ex:Rule .
+ex:Cond_HeavyPrecip_01 a ex:Condition ;
+  ex:var ex:precipitation ;
+  ex:featureKey "precipitation" ;
+  ex:op "GE" ;
+  ex:minValue "7.6"^^xsd:float ;
+  ex:unit "mm_per_hour" ;
+  ex:source "https://www.canada.ca/en/environment-climate-change/services/weather-manuals-documentation/manobs-surface-observations.html" ;
+  ex:note "MANOBS: heavy rain if rate of fall is 7.6 mm/h or more." .
+ex:Rule_HeavyPrecip_01 ex:hasCondition ex:Cond_HeavyPrecip_01 .
+ex:Heavy_Precipitation ex:hasRule ex:Rule_HeavyPrecip_01 .
+
+ex:Rec_HeavyPrecip_01 a ex:Recommendation ;
+  ex:text "Pluie forte : ralentissez, évitez les zones inondables et surveillez les alertes." .
+ex:Heavy_Precipitation ex:hasRecommendation ex:Rec_HeavyPrecip_01 .
+
+# ============================================================
+# Wind_Event (Wind Advisory example criteria)
+# Source: NWS office definitions page (criteria vary by office).
+# ============================================================
+ex:Rule_Wind_01 a ex:Rule .
+ex:Cond_Wind_01 a ex:Condition ;
+  ex:var ex:wind_speed_10m ;
+  ex:featureKey "wind_speed_10m" ;
+  ex:op "GE" ;
+  ex:minValue "31.0"^^xsd:float ;
+  ex:unit "mph" ;
+  ex:source "https://www.weather.gov/lwx/warningsdefined" ;
+  ex:note "Wind Advisory example: sustained winds 31-39 mph for an hour or more." .
+ex:Rule_Wind_01 ex:hasCondition ex:Cond_Wind_01 .
+ex:Wind_Event ex:hasRule ex:Rule_Wind_01 .
+
+ex:Rule_Wind_02 a ex:Rule .
+ex:Cond_Wind_02 a ex:Condition ;
+  ex:var ex:wind_gusts_10m ;
+  ex:featureKey "wind_gusts_10m" ;
+  ex:op "GE" ;
+  ex:minValue "46.0"^^xsd:float ;
+  ex:unit "mph" ;
+  ex:source "https://www.weather.gov/lwx/warningsdefined" ;
+  ex:note "Wind Advisory example: wind gusts 46-57 mph." .
+ex:Rule_Wind_02 ex:hasCondition ex:Cond_Wind_02 .
+ex:Wind_Event ex:hasRule ex:Rule_Wind_02 .
+
+ex:Rec_Wind_01 a ex:Recommendation ;
+  ex:text "Vent fort : sécurisez les objets dehors et évitez les zones boisées / arbres." .
+ex:Wind_Event ex:hasRecommendation ex:Rec_Wind_01 .
+
+# ============================================================
+# Tropical_System (Tropical storm begins at 34 knots)
+# Source: NOAA National Hurricane Center glossary.
+# ============================================================
+ex:Rule_Trop_01 a ex:Rule .
+ex:Cond_Trop_01 a ex:Condition ;
+  ex:var ex:wind_speed_10m ;
+  ex:featureKey "wind_speed_10m" ;
+  ex:op "GE" ;
+  ex:minValue "34.0"^^xsd:float ;
+  ex:unit "kn" ;
+  ex:source "https://www.nhc.noaa.gov/aboutgloss.shtml" ;
+  ex:note "NHC: Tropical storm classification begins at 34 kt (maximum sustained winds)." .
+ex:Rule_Trop_01 ex:hasCondition ex:Cond_Trop_01 .
+ex:Tropical_System ex:hasRule ex:Rule_Trop_01 .
+
+ex:Rec_Trop_01 a ex:Recommendation ;
+  ex:text "Système tropical : suivez les bulletins officiels et préparez un kit d’urgence." .
+ex:Tropical_System ex:hasRecommendation ex:Rec_Trop_01 .
+
+# ============================================================
+# Winter_Event (Winter Storm Warning heavy snow example criteria)
+# Source: NWS example criteria pages.
+# Note: Open-Meteo snowfall is the "preceding hour sum" in cm; we SUM over hours and compare in inches.
+# ============================================================
+ex:Rule_Winter_Snow12 a ex:Rule .
+ex:Cond_Winter_Snow12 a ex:Condition ;
+  ex:var ex:snowfall ;
+  ex:featureKey "snowfall" ;
+  ex:op "GE" ;
+  ex:minValue "6.0"^^xsd:float ;
+  ex:unit "in" ;
+  ex:agg "SUM" ;
+  ex:windowHours "12"^^xsd:integer ;
+  ex:source "https://www.weather.gov/dmx/wintersafety" ;
+  ex:note "Example: Winter Storm Warning if snow ≥ 6 inches in 12 hours (criteria vary by office)." .
+ex:Rule_Winter_Snow12 ex:hasCondition ex:Cond_Winter_Snow12 .
+ex:Winter_Event ex:hasRule ex:Rule_Winter_Snow12 .
+
+ex:Rule_Winter_Snow24 a ex:Rule .
+ex:Cond_Winter_Snow24 a ex:Condition ;
+  ex:var ex:snowfall ;
+  ex:featureKey "snowfall" ;
+  ex:op "GE" ;
+  ex:minValue "8.0"^^xsd:float ;
+  ex:unit "in" ;
+  ex:agg "SUM" ;
+  ex:windowHours "24"^^xsd:integer ;
+  ex:source "https://www.weather.gov/dmx/wintersafety" ;
+  ex:note "Example: Winter Storm Warning if snow ≥ 8 inches in 24 hours (criteria vary by office)." .
+ex:Rule_Winter_Snow24 ex:hasCondition ex:Cond_Winter_Snow24 .
+ex:Winter_Event ex:hasRule ex:Rule_Winter_Snow24 .
+
+ex:Rec_Winter_01 a ex:Recommendation ;
+  ex:text "Neige/gel : limitez les déplacements, équipez-vous et roulez doucement." .
+ex:Winter_Event ex:hasRecommendation ex:Rec_Winter_01 .
+
+# ============================================================
+# No-Event (KB concept + recommendation)
+# ============================================================
+
+ex:No_Event a ex:Phenomenon .
+
+ex:Rec_NoEvent_01 a ex:Recommendation ;
+  ex:text "Aucun événement majeur détecté. Rester vigilant et suivre les mises à jour météo." .
+
+ex:No_Event ex:hasRecommendation ex:Rec_NoEvent_01 .
+
+# ============================================================
+# Dense_Fog (PROXY: visibility not available)
+# Heuristic: RH high + dewpoint depression small + light wind
+# Uses: temperature_2m, relative_humidity_2m, wind_speed_10m
+# ============================================================
+ex:Dense_Fog a ex:Phenomenon .
+
+ex:Rule_FogProxy_01 a ex:Rule .
+ex:Cond_FogProxy_RH a ex:Condition ;
+  ex:var ex:relative_humidity_2m ;
+  ex:featureKey "relative_humidity_2m" ;
+  ex:op "GE" ;
+  ex:minValue "95.0"^^xsd:float ;
+  ex:unit "%" ;
+  ex:source "https://www.weather.gov/source/zhu/ZHU_Training_Page/fog_stuff/forecasting_fog/FORECASTING_FOG.htm" ;
+  ex:note "Proxy: very high RH indicates near-saturation (fog/low cloud more likely)." .
+
+ex:Cond_FogProxy_DD a ex:Condition ;
+  ex:var ex:dewpoint_depression ;
+  ex:featureKey "dewpoint_depression" ;
+  ex:op "LE" ;
+  ex:maxValue "2.0"^^xsd:float ;
+  ex:unit "C" ;
+  ex:source "https://avmet.navcanada.ca/en/radiation-fog.aspx" ;
+  ex:note "Proxy: temperature close to dew point (small dew point depression) favors fog/low stratus." .
+
+ex:Cond_FogProxy_Wind a ex:Condition ;
+  ex:var ex:wind_speed_10m ;
+  ex:featureKey "wind_speed_10m" ;
+  ex:op "LE" ;
+  ex:maxValue "3.0"^^xsd:float ;
+  ex:unit "m/s" ;
+  ex:source "https://avmet.navcanada.ca/en/radiation-fog.aspx" ;
+  ex:note "Proxy: light wind favors radiation fog formation." .
+
+ex:Rule_FogProxy_01 ex:hasCondition ex:Cond_FogProxy_RH .
+ex:Rule_FogProxy_01 ex:hasCondition ex:Cond_FogProxy_DD .
+ex:Rule_FogProxy_01 ex:hasCondition ex:Cond_FogProxy_Wind .
+ex:Dense_Fog ex:hasRule ex:Rule_FogProxy_01 .
+
+ex:Rec_FogProxy_01 a ex:Recommendation ;
+  ex:text "Risque de brouillard : prudence, feux allumés, distance de sécurité augmentée." .
+ex:Dense_Fog ex:hasRecommendation ex:Rec_FogProxy_01 .
+
+# ============================================================
+# Wildfire (PROXY: no fuels data; uses weather + dryness proxies)
+# Fuel is considered any material capable  of burning and is characterized by its moisture content (how wet the fuel is), size, shape, quantity, and the arrangement in which it is spread over the landscape. 
+# What are fuel sources? Any kind of combustible material - grass,  shrubs, trees, houses, propane tanks, wood piles.
+# Based on NWS Red Flag criteria examples (RH + wind) + dry antecedent precip
+# Uses: relative_humidity_2m, wind_speed_10m, wind_gusts_10m, precipitation, soil_moisture_0_to_7cm
+# ============================================================
+ex:Wildfire a ex:Phenomenon .
+
+ex:Rule_FireProxy_01 a ex:Rule .
+ex:Cond_Fire_RH a ex:Condition ;
+  ex:var ex:relative_humidity_2m ;
+  ex:featureKey "relative_humidity_2m" ;
+  ex:op "LE" ;
+  ex:maxValue "25.0"^^xsd:float ;
+  ex:unit "%" ;
+  ex:source "https://www.weather.gov/tae/redflag_criteria" ;
+  ex:note "Example Red Flag criteria include RH ≤ 25% (office-specific)." .
+
+ex:Cond_Fire_Wind a ex:Condition ;
+  ex:var ex:wind_speed_10m ;
+  ex:featureKey "wind_speed_10m" ;
+  ex:op "GE" ;
+  ex:minValue "15.0"^^xsd:float ;
+  ex:unit "mph" ;
+  ex:source "https://www.weather.gov/tae/redflag_criteria" ;
+  ex:note "Example Red Flag criteria include sustained wind ≥ 15 mph (office-specific)." .
+
+ex:Cond_Fire_Gust a ex:Condition ;
+  ex:var ex:wind_gusts_10m ;
+  ex:featureKey "wind_gusts_10m" ;
+  ex:op "GE" ;
+  ex:minValue "25.0"^^xsd:float ;
+  ex:unit "mph" ;
+  ex:source "https://www.weather.gov/tae/redflag_criteria" ;
+  ex:note "Example Red Flag criteria include frequent gusts ≥ 25 mph (office-specific)." .
+
+# Antecedent precip very low in last 24h (proxy for dry fuels)
+ex:Cond_Fire_Dry24 a ex:Condition ;
+  ex:var ex:precipitation ;
+  ex:featureKey "precipitation" ;
+  ex:op "LE" ;
+  ex:maxValue "0.10"^^xsd:float ;
+  ex:unit "in" ;
+  ex:agg "SUM" ;
+  ex:windowHours "24"^^xsd:integer ;
+  ex:source "https://www.weather.gov/gjt/firewxcriteria" ;
+  ex:note "Some NWS offices use 'dry thunderstorms' and rainfall amounts (e.g., <0.10 in) as part of fire weather criteria; here used only as a dryness proxy." .
+
+# Soil moisture low (proxy; NOT an official fuels metric)
+ex:Cond_Fire_SoilDry a ex:Condition ;
+  ex:var ex:soil_moisture_0_to_7cm ;
+  ex:featureKey "soil_moisture_0_to_7cm" ;
+  ex:op "LE" ;
+  ex:maxValue "0.15"^^xsd:float ;
+  ex:unit "m3/m3" ;
+  ex:source "https://www.weather.gov/safety/drought" ;
+  ex:note "Proxy: low near-surface soil moisture suggests dry conditions; fuels/fuel-moisture are not directly observed here." .
+
+ex:Rule_FireProxy_01 ex:hasCondition ex:Cond_Fire_RH .
+# wind OR gust: we implement both as conditions; engine uses AND across conditions,
+# so we create two rules: one for sustained wind, one for gusts.
+ex:Rule_FireProxy_01 ex:hasCondition ex:Cond_Fire_Wind .
+ex:Rule_FireProxy_01 ex:hasCondition ex:Cond_Fire_Dry24 .
+ex:Rule_FireProxy_01 ex:hasCondition ex:Cond_Fire_SoilDry .
+ex:Wildfire ex:hasRule ex:Rule_FireProxy_01 .
+
+ex:Rule_FireProxy_02 a ex:Rule .
+ex:Rule_FireProxy_02 ex:hasCondition ex:Cond_Fire_RH .
+ex:Rule_FireProxy_02 ex:hasCondition ex:Cond_Fire_Gust .
+ex:Rule_FireProxy_02 ex:hasCondition ex:Cond_Fire_Dry24 .
+ex:Rule_FireProxy_02 ex:hasCondition ex:Cond_Fire_SoilDry .
+ex:Wildfire ex:hasRule ex:Rule_FireProxy_02 .
+
+ex:Rec_FireProxy_01 a ex:Recommendation ;
+  ex:text "Risque incendie : évitez les flammes/étincelles, suivez les alertes locales, prudence au vent." .
+ex:Wildfire ex:hasRecommendation ex:Rec_FireProxy_01 .
+
+# ============================================================
+# Flood_Event (PROXY, weather-only)
+# Logic:
+#  - Flash flooding is typically driven by heavy/excessive rainfall over short periods,
+#    especially when the ground cannot absorb it (antecedent wetness).
+#  - "Heavy rain" intensity threshold uses MANOBS rate category (>= 7.6 mm/h).
+#  - Wet antecedent condition represented by high soil-moisture percentile (location-aware proxy).
+#
+# IMPORTANT: This is not "official flood criteria" (official approach uses FFG),
+# but it is a defensible proxy when hydrology variables are unavailable.
+# ============================================================
+
+# --- Rule 1: short-duration intense rainfall + very wet ground ---
+ex:Rule_FloodProxy_1h a ex:Rule .
+
+ex:Cond_Flood_1hHeavy a ex:Condition ;
+  ex:var ex:precip_1h_mm ;
+  ex:featureKey "precip_1h_mm" ;
+  ex:op "GE" ;
+  ex:minValue "7.6"^^xsd:float ;
+  ex:unit "mm_per_hour" ;
+  ex:source "https://www.canada.ca/en/environment-climate-change/services/weather-manuals-documentation/manobs-surface-observations.html" ;
+  ex:note "Heavy rain rate category: >= 7.6 mm/h (operational precipitation intensity classification)." .
+
+ex:Cond_Flood_WetGround a ex:Condition ;
+  ex:var ex:soil_moisture_pctile_30d ;
+  ex:featureKey "soil_moisture_pctile_30d" ;
+  ex:op "GE" ;
+  ex:minValue "80.0"^^xsd:float ;
+  ex:unit "percentile" ;
+  ex:source "https://www.nssl.noaa.gov/education/svrwx101/floods/" ;
+  ex:note "Flash floods occur when heavy rainfall exceeds the ground’s ability to absorb it; wet ground proxy uses local percentile (not an official soil cutoff)." .
+
+ex:Rule_FloodProxy_1h ex:hasCondition ex:Cond_Flood_1hHeavy, ex:Cond_Flood_WetGround .
+ex:Flood_Event ex:hasRule ex:Rule_FloodProxy_1h .
+
+# --- Rule 2: multi-hour heavy accumulation + very wet ground ---
+ex:Rule_FloodProxy_6h a ex:Rule .
+
+ex:Cond_Flood_6hHeavy a ex:Condition ;
+  ex:var ex:precip_6h_mm ;
+  ex:featureKey "precip_6h_mm" ;
+  ex:op "GE" ;
+  ex:minValue "30.0"^^xsd:float ;
+  ex:unit "mm_sum_6h" ;
+  ex:source "https://www.nssl.noaa.gov/education/svrwx101/floods/types/" ;
+  ex:note "Flash floods are caused by heavy/excessive rainfall over short periods (generally <6 hours). Threshold is a tunable operational proxy." .
+
+ex:Rule_FloodProxy_6h ex:hasCondition ex:Cond_Flood_6hHeavy, ex:Cond_Flood_WetGround .
+ex:Flood_Event ex:hasRule ex:Rule_FloodProxy_6h .
+
+ex:Rec_Flood_01 a ex:Recommendation ;
+  ex:text "Risque crue éclair : évitez les zones basses et ne traversez jamais une route inondée." .
+ex:Flood_Event ex:hasRecommendation ex:Rec_Flood_01 .
+
+
+# ============================================================
+# Debris_Flow (RAIN-TRIGGER THRESHOLD, OFFICIAL SOURCE)
+# Uses only: precipitation (hourly accumulation)
+#
+# NOTE (important): The cited guidance is for burn-scar/post-fire settings.
+# With no burn_scar / terrain variables available, this rule represents
+# "triggering rainfall intensity" rather than confirmed debris flow occurrence.
+# ============================================================
+
+ex:Rule_Debris_RainTrigger_01 a ex:Rule .
+
+ex:Debris_Flow a ex:Phenomenon .
+ex:Cond_Debris_IntenseRain_01 a ex:Condition ;
+  ex:var ex:precipitation ;
+  ex:featureKey "precipitation" ;
+  ex:op "GE" ;
+  ex:minValue "12.7"^^xsd:float ;      # 0.5 inch/hour ≈ 12.7 mm/hour
+  ex:unit "mm_per_hour" ;
+  ex:source "https://www.weather.gov/sew/burnscar" ;
+  ex:note "NWS burn-scar guidance: debris flows can start after only a few minutes of intense rain; 'intense' ~0.5 inch in an hour. Rainfall rate matters more than total rainfall." .
+
+ex:Rule_Debris_RainTrigger_01 ex:hasCondition ex:Cond_Debris_IntenseRain_01 .
+ex:Debris_Flow ex:hasRule ex:Rule_Debris_RainTrigger_01 .
+
+ex:Rec_Debris_01 a ex:Recommendation ;
+  ex:text "Pluie très intense : risque accru de glissements/coulées (surtout en terrain instable). Évitez ravins et pentes, suivez les alertes." .
+ex:Debris_Flow ex:hasRecommendation ex:Rec_Debris_01 .
+
+
+# ============================================================
+# High_Surf (PROXY: waves not available; wind/storm proxy for coastal points)
+# Uses: wind_gusts_10m, surface_pressure
+# ============================================================
+
+ex:High_Surf a ex:Phenomenon .
+
+ex:Rule_SurfProxy_01 a ex:Rule .
+ex:Cond_Surf_Gale a ex:Condition ;
+  ex:var ex:wind_gusts_10m ;
+  ex:featureKey "wind_gusts_10m" ;
+  ex:op "GE" ;
+  ex:minValue "34.0"^^xsd:float ;
+  ex:unit "kn" ;
+  ex:source "https://www.weather.gov/box/criteria" ;
+  ex:note "Proxy: gale-force winds are associated with hazardous marine conditions; wind is a key driver of waves." .
+
+ex:Cond_Surf_LowP a ex:Condition ;
+  ex:var ex:surface_pressure ;
+  ex:featureKey "surface_pressure" ;
+  ex:op "LE" ;
+  ex:maxValue "990.0"^^xsd:float ;
+  ex:unit "hPa" ;
+  ex:source "https://www.noaa.gov/jetstream/ocean/waves" ;
+  ex:note "Proxy: strong winds (often in storms) generate larger waves; pressure helps indicate storminess." .
+
+ex:Rule_SurfProxy_01 ex:hasCondition ex:Cond_Surf_Gale .
+ex:Rule_SurfProxy_01 ex:hasCondition ex:Cond_Surf_LowP .
+ex:High_Surf ex:hasRule ex:Rule_SurfProxy_01 .
+
+ex:Rec_SurfProxy_01 a ex:Recommendation ;
+  ex:text "Risque forte houle (côtier) : restez loin du rivage/rochers, attention aux vagues surprises." .
+ex:High_Surf ex:hasRecommendation ex:Rec_SurfProxy_01 .
+
+# ============================================================
+# Rip_Current (PROXY: rip currents driven by wave action; no wave data here)
+# Uses: same proxy as High_Surf (coastal only)
+# ============================================================
+
+ex:Rip_Current a ex:Phenomenon .
+ex:Rule_RipProxy_01 a ex:Rule .
+ex:Rule_RipProxy_01 ex:hasCondition ex:Cond_Surf_Gale .
+ex:Rule_RipProxy_01 ex:hasCondition ex:Cond_Surf_LowP .
+ex:Rip_Current ex:hasRule ex:Rule_RipProxy_01 .
+ex:Rec_RipProxy_01 a ex:Recommendation ;
+  ex:text "Risque courants d'arrachement (côtier) : évitez la baignade, suivez les drapeaux et consignes." .
+ex:Rip_Current ex:hasRecommendation ex:Rec_RipProxy_01 .
+
+# ============================================================
+# Drought (PROXY: drought is multi-week/month phenomenon)
+# Uses: precipitation sum (30d) + soil moisture
+# ============================================================
+ex:Drought a ex:Phenomenon .
+
+ex:Rule_DroughtProxy_01 a ex:Rule .
+ex:Cond_Drought_P30d a ex:Condition ;
+  ex:var ex:precipitation ;
+  ex:featureKey "precipitation" ;
+  ex:op "LE" ;
+  ex:maxValue "25.0"^^xsd:float ;
+  ex:unit "mm" ;
+  ex:agg "SUM" ;
+  ex:windowHours "720"^^xsd:integer ;
+  ex:source "https://www.drought.gov/" ;
+  ex:note "Drought is lack of precipitation over an extended period (season or more). Here: 30-day low precip as a short-term proxy." .
+
+ex:Cond_Drought_Soil a ex:Condition ;
+  ex:var ex:soil_moisture_0_to_7cm ;
+  ex:featureKey "soil_moisture_0_to_7cm" ;
+  ex:op "LE" ;
+  ex:maxValue "0.15"^^xsd:float ;
+  ex:unit "m3/m3" ;
+  ex:source "https://www.weather.gov/safety/drought" ;
+  ex:note "Proxy: low near-surface soil moisture can indicate short-term agricultural dryness." .
+
+ex:Rule_DroughtProxy_01 ex:hasCondition ex:Cond_Drought_P30d .
+ex:Rule_DroughtProxy_01 ex:hasCondition ex:Cond_Drought_Soil .
+ex:Drought ex:hasRule ex:Rule_DroughtProxy_01 .
+
+ex:Rec_DroughtProxy_01 a ex:Recommendation ;
+  ex:text "Risque sécheresse court terme : économisez l'eau, surveillez l'état des cultures/sols." .
+ex:Drought ex:hasRecommendation ex:Rec_DroughtProxy_01 .
+
+
+
+# ============================================================
+# Extreme_Temperature (REAL, INPUT-BASED)
+# Rule A: Extreme heat if Heat Index is in NWS "Danger" category (>= 103°F).
+# Rule B: Extreme cold if Wind Chill reaches very dangerous levels (<= -25°F).
+# ============================================================
+
+# --- A) EXTREME HEAT (HEAT INDEX) ---
+ex:Rule_ExtTemp_Heat_01 a ex:Rule .
+ex:Cond_ExtTemp_HeatIndexDanger a ex:Condition ;
+  ex:var ex:heat_index_f ;
+  ex:featureKey "heat_index_f" ;
+  ex:op "GE" ;
+  ex:minValue "103.0"^^xsd:float ;
+  ex:unit "F" ;
+  ex:source "https://www.weather.gov/ama/heatindex" ;
+  ex:note "NWS Heat Index classification: 'Danger' = 103°F to 124°F (heat cramps/exhaustion likely; heat stroke possible). Heat Index computed from temperature + RH (NWS/WPC formula)." .
+ex:Rule_ExtTemp_Heat_01 ex:hasCondition ex:Cond_ExtTemp_HeatIndexDanger .
+ex:Extreme_Temperature ex:hasRule ex:Rule_ExtTemp_Heat_01 .
+
+# --- B) EXTREME COLD (WIND CHILL) ---
+ex:Rule_ExtTemp_Cold_01 a ex:Rule .
+ex:Cond_ExtTemp_WindChillSevere a ex:Condition ;
+  ex:var ex:wind_chill_f ;
+  ex:featureKey "wind_chill_f" ;
+  ex:op "LE" ;
+  ex:maxValue "-25.0"^^xsd:float ;
+  ex:unit "F" ;
+  ex:source "https://www.weather.gov/bou/windchill" ;
+  ex:note "NWS notes frostbite is possible within ~15 minutes for wind chill values near -25°F. Wind chill computed from temperature + wind speed using NWS formula." .
+ex:Rule_ExtTemp_Cold_01 ex:hasCondition ex:Cond_ExtTemp_WindChillSevere .
+ex:Extreme_Temperature ex:hasRule ex:Rule_ExtTemp_Cold_01 .
+
+# Recommendation
+ex:Rec_ExtTemp_01 a ex:Recommendation ;
+  ex:text "Températures extrêmes : limitez l’exposition, hydratez-vous en chaleur, couvrez peau/extrémités en froid, et suivez les alertes locales." .
+ex:Extreme_Temperature ex:hasRecommendation ex:Rec_ExtTemp_01 .

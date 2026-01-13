@@ -403,3 +403,33 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"❌ Error fetching 7-day forecast: {e}")
             return []
+    @classmethod
+    async def get_forecast_for_expert(cls, lat: float, lon: float) -> List[Dict]:
+     """Récupère les données complètes pour le Système Expert"""
+     try:
+        async with cls._pool.acquire() as conn:
+            query = """
+            SELECT 
+                target_timestamp as timestamp,
+                predicted_event,
+                confidence_score,
+                predicted_temperature as temperature_2m,
+                predicted_humidity as relative_humidity_2m,
+                predicted_pressure as surface_pressure,
+                predicted_wind_speed as wind_speed_10m,
+                predicted_wind_gusts as wind_gusts_10m,
+                predicted_precipitation as precipitation,
+                predicted_snowfall as snowfall,
+                predicted_soil_moisture as soil_moisture_0_to_7cm
+            FROM weekly_forecasts
+            WHERE ABS(latitude - $1::numeric) < 0.0001 
+              AND ABS(longitude - $2::numeric) < 0.0001
+              AND target_timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+            ORDER BY target_timestamp ASC
+            LIMIT 168; -- On prend 7 jours (168h) pour avoir la timeline complète
+            """
+            rows = await conn.fetch(query, lat, lon)
+            return [dict(row) for row in rows]
+     except Exception as e:
+        print(f"Erreur DB: {e}")
+        return []
