@@ -22,7 +22,7 @@ def get_temporal_features(specific_dt):
     day_cos = np.cos(2 * np.pi * day_of_year / 365.0)
     return float(day_sin), float(day_cos)
 
-def generate_full_weather(lat, lon, current_time):
+def generate_full_weather(lat, lon, id,current_time):
     """Génère les données météo pour une station et une heure précise"""
     d_sin, d_cos = get_temporal_features(current_time)
     
@@ -30,6 +30,7 @@ def generate_full_weather(lat, lon, current_time):
     temp_base = 15 + 8 * math.sin((current_time.hour - 8) * 2 * math.pi / 24)
     
     return {
+        "station_id":id,
         "timestamp": current_time.isoformat(),
         "latitude": float(lat),
         "longitude": float(lon),
@@ -49,7 +50,7 @@ async def stream_data():
     # 1. Connexion DB pour récupérer les stations
     try:
         conn = await asyncpg.connect(DB_DSN)
-        stations = await conn.fetch("SELECT latitude, longitude FROM weather_stations")
+        stations = await conn.fetch("SELECT id,latitude, longitude FROM weather_stations")
         await conn.close()
         print(f"✅ {len(stations)} stations récupérées de la base de données.")
     except Exception as e:
@@ -79,7 +80,7 @@ async def stream_data():
                     if station_key not in sequence_counter:
                         sequence_counter[station_key] = 0
                     
-                    payload = generate_full_weather(st['latitude'], st['longitude'], current_simulated_time)
+                    payload = generate_full_weather(st['latitude'], st['longitude'],st["id"] ,current_simulated_time)
                     
                     # ✅ Ajouter le sequence_index
                     payload["sequence_index"] = sequence_counter[station_key]

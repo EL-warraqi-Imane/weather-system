@@ -149,7 +149,7 @@ def run_7day_forecast(history, lat, lon):
     return forecast_results
 
 def process_batch(batch_df, batch_id):
-    """Traite chaque micro-batch"""
+    all_historical_records = []
     print(f"\n{'='*70}")
     print(f"📦 BATCH #{batch_id} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}")
@@ -160,9 +160,10 @@ def process_batch(batch_df, batch_id):
     
     rows = batch_df.collect()
     all_forecasts = []
-    stations_processed = 0
+    all_analyses = [] # <--- LISTE POUR STOCKER LES ANALYSES
     
     for row in rows:
+        # --- PRÉPARATION DES DONNÉES ---
         raw_history = row['historical_sequence'] if row['historical_sequence'] else []
         history_as_dicts = [item.asDict() for item in raw_history]
         
@@ -178,76 +179,135 @@ def process_batch(batch_df, batch_id):
                 'soil_moisture': x['soil_moisture_0_to_7cm'],
                 'timestamp': x['timestamp']
             }
-            for x in history_as_dicts 
-            if x.get('timestamp') is not None
+            for x in history_as_dicts if x.get('timestamp') is not None
         ]
+        for idx, point in enumerate(clean_history):
+            all_historical_records.append({
+                "simulation_id": f"sim_{datetime.now().strftime('%Y%m%d')}", # Id unique par jour
+                "sequence_index": idx,
+                "target_date": point['timestamp'], # Le timestamp devient ta target_date
+                "latitude": row['latitude'],
+                "longitude": row['longitude'],
+                "temperature": point['temperature'],
+                "humidity": point['humidity'],
+                "pressure": point['pressure'],
+                "wind_speed": point['wind_speed'],
+                "wind_gusts": point['wind_gusts'],
+                "precipitation": point['precipitation'],
+                "snowfall": point['snowfall'],
+                "soil_moisture": point['soil_moisture']
+            })
         
         if len(clean_history) < 24:
-            print(f"⏭️  Station ({row['latitude']:.2f}, {row['longitude']:.2f}): "
-                  f"{len(clean_history)}/24 points")
             continue
         
+        # Tri pour le modèle GRU
         history = sorted(clean_history, key=lambda x: x['timestamp'])[-24:]
         
-        print(f"🌍 Station ({row['latitude']:.2f}, {row['longitude']:.2f})")
-        print(f"   📊 {len(history)} points | {history[0]['timestamp']} → {history[-1]['timestamp']}")
+        # --- PARTIE ANALYSE ---
+        temps = [x['temperature'] for x in clean_history]
+        all_analyses.append({
+            "latitude": row['latitude'], # On utilise lat/lon pour identifier
+            "longitude": row['longitude'],
+            "analysis_date": datetime.now().date(),
+            "avg_temp": __builtins__.sum(temps) / len(temps),
+            "max_wind_speed": __builtins__.max([x['wind_speed'] for x in clean_history]),
+            "total_precipitation": __builtins__.sum([x['precipitation'] for x in clean_history]),
+            "created_at": datetime.now()
+        })
         
+        # --- PARTIE PRÉDICTION ---
         try:
             station_forecasts = run_7day_forecast(history, row['latitude'], row['longitude'])
             all_forecasts.extend(station_forecasts)
-            stations_processed += 1
-            print(f"   ✅ {len(station_forecasts)} prédictions générées")
         except Exception as e:
-            print(f"   ❌ Erreur: {e}")
-    
-    if all_forecasts:
+            print(f" ❌ Erreur prédiction Station ({row['latitude']}): {e}")
+
+    # --- INSERTION EN BASE DE DONNÉES ---
+    # Requête pour historical_data
+    history_query = """
+                INSERT INTO historical_data (
+                    simulation_id, sequence_index, target_date, latitude, longitude,
+                    temperature, humidity, pressure, wind_speed, wind_gusts,
+                    precipitation, snowfall, soil_moisture
+                ) VALUES (
+                    %(simulation_id)s, %(sequence_index)s, %(target_date)s, %(latitude)s, %(longitude)s,
+                    %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
+                    %(precipitation)s, %(snowfall)s, %(soil_moisture)s
+                )
+            """
+            
+    # --- INSERTION EN BASE DE DONNÉES ---
+    if all_historical_records or all_forecasts or all_analyses:
         conn = None
         try:
-            print(f"🔌 Connexion directe à PostgreSQL...")
             conn = psycopg2.connect(
-                host="localhost", # ou l'IP de ton conteneur si différent
-                port="5555",
-                database="weather",
-                user="admin",
+                host="localhost", 
+                port="5555", 
+                database="weather", 
+                user="admin", 
                 password="admin123"
             )
             cur = conn.cursor()
             
-            # Requête SQL d'insertion
-            insert_query = """
-                INSERT INTO weekly_forecasts (
-                    latitude, longitude, target_timestamp, 
-                    predicted_temperature, predicted_humidity, predicted_pressure,
-                    predicted_wind_speed, predicted_wind_gusts, predicted_precipitation,
-                    predicted_snowfall, predicted_soil_moisture,
-                    created_at, model_version
-                ) VALUES (
-                    %(latitude)s, %(longitude)s, %(target_timestamp)s,
-                    %(predicted_temperature)s, %(predicted_humidity)s, %(predicted_pressure)s,
-                    %(predicted_wind_speed)s, %(predicted_wind_gusts)s, %(predicted_precipitation)s,
-                    %(predicted_snowfall)s, %(predicted_soil_moisture)s,
-                    %(created_at)s, %(model_version)s
-                )
+            # 1. Insertion des données HISTORIQUES
+            history_query = """
+    INSERT INTO historical_data (
+        simulation_id, sequence_index, target_date, latitude, longitude,
+        temperature, humidity, pressure, wind_speed, wind_gusts,
+        precipitation, snowfall, soil_moisture
+    ) VALUES (
+        %(simulation_id)s, %(sequence_index)s, %(target_date)s, %(latitude)s, %(longitude)s,
+        %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
+        %(precipitation)s, %(snowfall)s, %(soil_moisture)s
+    )
+     ON CONFLICT (latitude, longitude, target_date, sequence_index) DO NOTHING
             """
-            
-            # Exécution en batch (très rapide)
-            cur.executemany(insert_query, all_forecasts)
+            if all_historical_records:
+                cur.executemany(history_query, all_historical_records)
+                print(f"✅ {len(all_historical_records)} points historiques sauvegardés.")
+
+            # 2. Insertion des PRÉDICTIONS
+            forecast_query = """
+                INSERT INTO weekly_forecasts (
+                    latitude, longitude, target_timestamp, predicted_temperature, 
+                    predicted_humidity, predicted_pressure, predicted_wind_speed, 
+                    predicted_wind_gusts, predicted_precipitation, predicted_snowfall, 
+                    predicted_soil_moisture, created_at, model_version
+                ) VALUES (
+                    %(latitude)s, %(longitude)s, %(target_timestamp)s, %(predicted_temperature)s,
+                    %(predicted_humidity)s, %(predicted_pressure)s, %(predicted_wind_speed)s,
+                    %(predicted_wind_gusts)s, %(predicted_precipitation)s, %(predicted_snowfall)s,
+                    %(predicted_soil_moisture)s, %(created_at)s, %(model_version)s
+                ) ON CONFLICT (latitude, longitude, target_timestamp) DO UPDATE SET 
+                predicted_temperature = EXCLUDED.predicted_temperature, created_at = EXCLUDED.created_at;
+            """
+            if all_forecasts:
+                cur.executemany(forecast_query, all_forecasts)
+
+            # 3. Insertion des ANALYSES
+            analysis_query = """
+                INSERT INTO station_daily_summary (
+                    station_id, analysis_date, avg_temp, max_wind_speed, 
+                    total_precipitation, created_at
+                ) VALUES (
+                    (SELECT id FROM weather_stations WHERE latitude=%(latitude)s AND longitude=%(longitude)s LIMIT 1),
+                    %(analysis_date)s, %(avg_temp)s, %(max_wind_speed)s, %(total_precipitation)s, %(created_at)s
+                ) ON CONFLICT (station_id, analysis_date) DO UPDATE SET avg_temp = EXCLUDED.avg_temp;
+            """
+            if all_analyses:
+                cur.executemany(analysis_query, all_analyses)
             
             conn.commit()
-            cur.close()
-            
-            print(f"\n{'='*70}")
-            print(f"✅ SUCCÈS : {len(all_forecasts)} prédictions insérées via psycopg2")
-            print(f"{'='*70}\n")
+            print(f"✅ Batch #{batch_id} terminé avec succès.")
             
         except Exception as e:
-            print(f"\n❌ ERREUR SQL Python : {e}\n")
-            if conn:
-                conn.rollback()
+            print(f"❌ ERREUR SQL Critique : {e}")
+            if conn: conn.rollback()
         finally:
-            if conn:
+            if conn: 
+                cur.close()
                 conn.close()
-# --- SCHÉMA KAFKA ---
 schema = StructType([
     StructField("latitude", DoubleType()),
     StructField("longitude", DoubleType()),
@@ -293,7 +353,7 @@ windowed_df = parsed_df \
     .groupBy(
         "latitude", 
         "longitude",
-        window("event_time", "24 hours", "1 hour")
+        window("event_time", "24 hours")
     ) \
     .agg(
         collect_list(struct(
@@ -308,14 +368,13 @@ windowed_df = parsed_df \
             "timestamp",
             "event_time"
         )).alias("historical_sequence")
-    ) \
+    )\
     .filter(size(col("historical_sequence")) >= 24)
 
 query = windowed_df.writeStream \
     .foreachBatch(process_batch) \
     .outputMode("update") \
     .trigger(processingTime='1 minute') \
-    .option("checkpointLocation", "/tmp/spark_weather_checkpoints") \
     .start()
 
 print("✅ Streaming démarré. En attente de données...\n")

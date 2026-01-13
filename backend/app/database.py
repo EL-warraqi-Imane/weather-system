@@ -101,9 +101,23 @@ class DatabaseService:
                         precipitation DECIMAL(5, 2),
                         snowfall DECIMAL(5, 2),
                         soil_moisture DECIMAL(4, 3),
-                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (latitude, longitude, target_date, sequence_index)
                     )
                 """)
+                await conn.execute("""
+                        CREATE TABLE station_daily_summary (
+                        id SERIAL PRIMARY KEY,
+                        station_id INTEGER REFERENCES weather_stations(id), -- Lien vers ta table station
+                        analysis_date DATE NOT NULL,
+                        avg_temp DOUBLE PRECISION,
+                        max_wind_speed DOUBLE PRECISION,
+                        total_precipitation DOUBLE PRECISION,
+                        humidity_trend VARCHAR(20), -- Ex: "Rising", "Stable", "Falling"
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(station_id, analysis_date) -- Évite les doublons pour une même journée
+                                );
+                                   """)
                 
                 # 4. Création des Index (Correction des noms de colonnes)
                 await conn.execute("""
