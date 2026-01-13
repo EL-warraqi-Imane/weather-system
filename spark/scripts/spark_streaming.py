@@ -177,7 +177,7 @@ def run_7day_forecast(history, lat, lon):
     forecast_results = []
     start_time = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     
-    for i in range(24): # Prévision sur 24h
+    for i in range(168): # Prévision sur 24h
         target_time = start_time + timedelta(hours=i)
         
         # 1. Prédiction GRU

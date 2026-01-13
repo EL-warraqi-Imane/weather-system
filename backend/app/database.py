@@ -69,6 +69,8 @@ class DatabaseService:
                         id SERIAL PRIMARY KEY,
                         latitude DECIMAL(10, 6),
                         longitude DECIMAL(10, 6),
+                        predicted_event VARCHAR(100), 
+                        confidence_score DECIMAL(5, 2), 
                         target_timestamp TIMESTAMP NOT NULL,
                         predicted_temperature DECIMAL(5, 2),
                         predicted_humidity DECIMAL(5, 2),
@@ -106,7 +108,7 @@ class DatabaseService:
                     )
                 """)
                 await conn.execute("""
-                        CREATE TABLE station_daily_summary (
+                        CREATE  TABLE IF NOT EXISTS station_daily_summary (
                         id SERIAL PRIMARY KEY,
                         station_id INTEGER REFERENCES weather_stations(id), -- Lien vers ta table station
                         analysis_date DATE NOT NULL,
@@ -369,4 +371,35 @@ class DatabaseService:
                 return [dict(r) for r in rows]
         except Exception as e:
             logger.error(f"❌ Error fetching stations: {e}")
+            return []
+    @classmethod
+    async def get_7day_forecast(cls, lat: float, lon: float) -> List[Dict]:
+        """Récupère les prédictions pour les 7 prochains jours (168h)"""
+        try:
+            async with cls._pool.acquire() as conn:
+                # On récupère les colonnes nécessaires + l'event et la confidence
+                # Note: Assure-toi que les colonnes predicted_event et confidence_score existent en DB
+                query = """
+                SELECT 
+                    target_timestamp as timestamp,
+                    predicted_event as event,
+                    confidence_score as confidence,
+                    predicted_temperature as temperature,
+                    predicted_humidity as humidity,
+                    predicted_pressure as pressure,
+                    predicted_wind_speed as wind_speed,
+                    predicted_precipitation as precipitation
+                FROM weekly_forecasts
+                WHERE ABS(latitude - $1::numeric) < 0.0001 
+                  AND ABS(longitude - $2::numeric) < 0.0001
+                  AND target_timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+                ORDER BY target_timestamp ASC
+                LIMIT 24;
+            """
+                rows = await conn.fetch(query, lat, lon)
+                
+                # Convertit les records asyncpg en liste de dictionnaires
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error fetching 7-day forecast: {e}")
             return []
