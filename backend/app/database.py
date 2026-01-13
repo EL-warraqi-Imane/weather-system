@@ -54,7 +54,7 @@ class DatabaseService:
         """Create tables if they don't exist"""
         try:
             async with cls._pool.acquire() as conn:
-                # Create predictions table
+                # 1. Table Stations
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS weather_stations (
                         id SERIAL PRIMARY KEY,
@@ -62,15 +62,14 @@ class DatabaseService:
                         longitude DECIMAL(10, 6) NOT NULL
                     )
                 """)
+
+                # 2. Table Forecasts (Correction du UNIQUE ici)
                 await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS predictions (
+                    CREATE TABLE IF NOT EXISTS weekly_forecasts (
                         id SERIAL PRIMARY KEY,
-                        prediction_id VARCHAR(100) UNIQUE NOT NULL,
-                        target_date DATE NOT NULL,
                         latitude DECIMAL(10, 6),
                         longitude DECIMAL(10, 6),
-                        
-                        -- Predictions
+                        target_timestamp TIMESTAMP NOT NULL,
                         predicted_temperature DECIMAL(5, 2),
                         predicted_humidity DECIMAL(5, 2),
                         predicted_pressure DECIMAL(7, 2),
@@ -79,16 +78,13 @@ class DatabaseService:
                         predicted_precipitation DECIMAL(5, 2),
                         predicted_snowfall DECIMAL(5, 2),
                         predicted_soil_moisture DECIMAL(4, 3),
-                        
-                        -- Metadata
-                        confidence_score DECIMAL(3, 2),
                         model_version VARCHAR(50),
-                        processing_time DECIMAL(10, 2),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (latitude, longitude, target_timestamp)
                     )
                 """)
                 
-                # Create historical data table
+                # 3. Table Historical Data
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS historical_data (
                         id SERIAL PRIMARY KEY,
@@ -97,8 +93,6 @@ class DatabaseService:
                         target_date DATE,
                         latitude DECIMAL(10, 6),
                         longitude DECIMAL(10, 6),
-                        
-                        -- Weather data
                         temperature DECIMAL(5, 2),
                         humidity DECIMAL(5, 2),
                         pressure DECIMAL(7, 2),
@@ -107,47 +101,49 @@ class DatabaseService:
                         precipitation DECIMAL(5, 2),
                         snowfall DECIMAL(5, 2),
                         soil_moisture DECIMAL(4, 3),
-                        
                         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
                 
-                # Create indexes
+                # 4. Création des Index (Correction des noms de colonnes)
                 await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_predictions_date 
-                    ON predictions(target_date)
+                    CREATE INDEX IF NOT EXISTS idx_forecasts_timestamp 
+                    ON weekly_forecasts(target_timestamp)
                 """)
                 
                 await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_predictions_location 
-                    ON predictions(latitude, longitude)
+                    CREATE INDEX IF NOT EXISTS idx_forecasts_location 
+                    ON weekly_forecasts(latitude, longitude)
                 """)
                 
-                logger.info("✅ Database tables initialized")
+                logger.info("✅ Database tables and indexes initialized")
                 
         except Exception as e:
             logger.error(f"❌ Error initializing tables: {e}")
             raise
-           
-    
+
     @classmethod
     async def save_prediction(cls, prediction_data: Dict) -> bool:
-        """Save a prediction to database"""
+        """Save a prediction to database with UPSERT logic"""
         try:
             async with cls._pool.acquire() as conn:
+                # Note: J'ai changé 'predictions' en 'weekly_forecasts' pour correspondre à l'init
                 await conn.execute("""
-                    INSERT INTO predictions (
-                        prediction_id, target_date, latitude, longitude,
+                    INSERT INTO weekly_forecasts (
+                        latitude, longitude, target_timestamp,
                         predicted_temperature, predicted_humidity, predicted_pressure,
                         predicted_wind_speed, predicted_wind_gusts, predicted_precipitation,
-                        predicted_snowfall, predicted_soil_moisture,
-                        confidence_score, model_version, processing_time
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        predicted_snowfall, predicted_soil_moisture, model_version
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ON CONFLICT (latitude, longitude, target_timestamp) 
+                    DO UPDATE SET 
+                        predicted_temperature = EXCLUDED.predicted_temperature,
+                        predicted_humidity = EXCLUDED.predicted_humidity,
+                        created_at = CURRENT_TIMESTAMP
                 """,
-                    prediction_data['prediction_id'],
-                    prediction_data['target_date'],
-                    prediction_data.get('latitude', 48.8566),
-                    prediction_data.get('longitude', 2.3522),
+                    prediction_data.get('latitude'),
+                    prediction_data.get('longitude'),
+                    prediction_data['target_timestamp'],
                     prediction_data['predicted_temperature'],
                     prediction_data['predicted_humidity'],
                     prediction_data['predicted_pressure'],
@@ -156,18 +152,12 @@ class DatabaseService:
                     prediction_data['predicted_precipitation'],
                     prediction_data['predicted_snowfall'],
                     prediction_data['predicted_soil_moisture'],
-                    prediction_data['confidence_score'],
-                    prediction_data['model_version'],
-                    prediction_data['processing_time']
+                    prediction_data['model_version']
                 )
-            
-            logger.info(f"✅ Prediction saved: {prediction_data['prediction_id']}")
             return True
-            
         except Exception as e:
             logger.error(f"❌ Error saving prediction: {e}")
             return False
-    
     @classmethod
     async def save_historical_data(cls, historical_data: List[Dict]) -> bool:
         """Save historical data to database"""

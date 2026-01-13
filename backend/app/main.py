@@ -8,7 +8,7 @@ import asyncio
 import numpy as np
 from app.schemas import *
 from app.model_loader import WeatherModel
-from app.kafka_producer import KafkaProducer
+# from app.kafka_producer import KafkaProducer
 from app.database import DatabaseService
 from app.cache import RedisCache
 import math
@@ -16,7 +16,7 @@ import pandas as pd
 from sqlalchemy import create_engine, Integer
 # Variables globales
 weather_model = WeatherModel()
-kafka_producer = KafkaProducer()
+# kafka_producer = KafkaProducer()
 db_service = DatabaseService()
 redis_cache = RedisCache()
 
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
         print(f"❌ Erreur lors du chargement du modèle: {e}")
     
     # Initialiser les services
-    await kafka_producer.initialize()
+    # await kafka_producer.initialize()
     await db_service.initialize()
     await redis_cache.initialize()
     await db_service.bulk_insert_stations()
@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     print("🔴 Arrêt de l'application...")
-    await kafka_producer.close()
+    # await kafka_producer.close()
     await db_service.close()
     await redis_cache.close()
 
@@ -85,7 +85,7 @@ async def root():
 async def health_check():
     """Vérifie la santé de tous les services"""
     services_status = {
-        "kafka": await kafka_producer.is_healthy(),
+        # "kafka": await kafka_producer.is_healthy(),
         "database": await db_service.is_healthy(),
         "redis": await redis_cache.is_healthy(),
         "model": weather_model.is_loaded
@@ -153,7 +153,7 @@ async def predict_weather(
         
         # 4. Publier sur Kafka (en arrière-plan)
         background_tasks.add_task(
-            kafka_producer.send_historical_data,
+            # kafka_producer.send_historical_data,
             historical_data,
             request.target_date,
             request.latitude,

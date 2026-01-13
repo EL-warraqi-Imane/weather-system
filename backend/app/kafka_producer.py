@@ -1,98 +1,103 @@
 import json
 import asyncio
-from datetime import datetime
+import math
+import numpy as np
+import asyncpg
+from datetime import datetime, timedelta
 from aiokafka import AIOKafkaProducer
-from typing import List, Dict
-import logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configuration (Vérifie bien tes ports PostgreSQL)
+DB_DSN = "postgresql://admin:admin123@localhost:5555/weather"
+KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+TOPIC_NAME = "weather-raw-data"
 
-class KafkaProducer:
-    def __init__(self):
-        self.producer = None
-        self.topic_historical = "weather-historical-data"
-        self.topic_predictions = "weather-predictions"
+# Paramètres de simulation
+WAIT_BETWEEN_DAYS = 60  # Attente de 60 secondes après avoir envoyé 24h de données
+WAIT_BETWEEN_HOURS = 0.5 # Petit délai pour ne pas saturer Kafka instantanément (0.5s)
+
+def get_temporal_features(specific_dt):
+    """Calcule day_sin et day_cos pour un moment précis"""
+    day_of_year = specific_dt.timetuple().tm_yday
+    day_sin = np.sin(2 * np.pi * day_of_year / 365.0)
+    day_cos = np.cos(2 * np.pi * day_of_year / 365.0)
+    return float(day_sin), float(day_cos)
+
+def generate_full_weather(lat, lon, current_time):
+    """Génère les données météo pour une station et une heure précise"""
+    d_sin, d_cos = get_temporal_features(current_time)
     
-    async def initialize(self, bootstrap_servers: str = "localhost:9092"):
-        """Initialise le producteur Kafka"""
-        try:
-            self.producer = AIOKafkaProducer(
-                bootstrap_servers=bootstrap_servers,
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: str(k).encode('utf-8') if k else None
-            )
-            
-            await self.producer.start()
-            logger.info(f"✅ Producteur Kafka connecté à {bootstrap_servers}")
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur de connexion Kafka: {e}")
-            raise
+    # Simulation d'une courbe de température basée sur l'heure (plus froid à 4h, plus chaud à 15h)
+    temp_base = 15 + 8 * math.sin((current_time.hour - 8) * 2 * math.pi / 24)
     
-    async def send_historical_data(
-        self,
-        historical_data: List[Dict],
-        target_date: str,
-        latitude: float,
-        longitude: float
-    ):
-        """Envoie les données historiques sur Kafka"""
-        try:
-            simulation_id = f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            for i, data_point in enumerate(historical_data):
-                message = {
-                    "simulation_id": simulation_id,
-                    "target_date": target_date,
-                    "sequence_index": i,
-                    "total_sequences": len(historical_data),
-                    "data": data_point,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "timestamp": datetime.now().isoformat()
-                }
+    return {
+        "timestamp": current_time.isoformat(),
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "temperature_2m": round(temp_base + np.random.normal(0, 0.5), 2),
+        "relative_humidity_2m": round(max(0, 60 + np.random.normal(0, 5)), 2),
+        "surface_pressure": round(1013 + np.random.normal(0, 2), 2),
+        "wind_speed_10m": round(abs(5 + np.random.normal(0, 2)), 2),
+        "wind_gusts_10m": round(abs(7 + np.random.normal(0, 3)), 2),
+        "precipitation": round(max(0, np.random.exponential(0.01)), 2),
+        "snowfall": 0.0,
+        "soil_moisture_0_to_7cm": round(0.3 + np.random.normal(0, 0.01), 3),
+        "day_sin": d_sin,
+        "day_cos": d_cos
+    }
+
+async def stream_data():
+    # 1. Connexion DB pour récupérer les stations
+    try:
+        conn = await asyncpg.connect(DB_DSN)
+        stations = await conn.fetch("SELECT latitude, longitude FROM weather_stations")
+        await conn.close()
+        print(f"✅ {len(stations)} stations récupérées de la base de données.")
+    except Exception as e:
+        print(f"❌ Erreur DB: {e}")
+        return
+
+    # 2. Initialisation Kafka
+    producer = AIOKafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
+    await producer.start()
+
+    try:
+        start_date = datetime.now()
+        
+        while True:
+            print(f"🚀 Début de l'envoi pour la journée du {start_date.date()}")
+
+            for hour in range(24):
+                current_simulated_time = start_date.replace(hour=hour, minute=0, second=0)
+                sequence_counter = {}  
+                for st in stations:
+                    station_key = f"{st['latitude']}_{st['longitude']}"
+                    
+                    # ✅ Initialiser le compteur si nécessaire
+                    if station_key not in sequence_counter:
+                        sequence_counter[station_key] = 0
+                    
+                    payload = generate_full_weather(st['latitude'], st['longitude'], current_simulated_time)
+                    
+                    # ✅ Ajouter le sequence_index
+                    payload["sequence_index"] = sequence_counter[station_key]
+                    sequence_counter[station_key] += 1
+                    
+                    key = station_key.encode('utf-8')
+                    await producer.send(TOPIC_NAME, value=payload, key=key)
                 
-                # Utiliser la combinaison simulation_id + index comme clé
-                key = f"{simulation_id}_{i}"
-                
-                await self.producer.send_and_wait(
-                    topic=self.topic_historical,
-                    value=message,
-                    key=key
-                )
-            
-            logger.info(f"✅ {len(historical_data)} messages envoyés à {self.topic_historical}")
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur d'envoi Kafka: {e}")
-    
-    async def send_prediction(self, prediction: Dict):
-        """Envoie une prédiction sur Kafka"""
-        try:
-            await self.producer.send_and_wait(
-                topic=self.topic_predictions,
-                value=prediction,
-                key=prediction.get('prediction_id', str(datetime.now().timestamp()))
-            )
-            
-            logger.info(f"✅ Prédiction envoyée à {self.topic_predictions}")
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur d'envoi de prédiction: {e}")
-    
-    async def is_healthy(self) -> bool:
-        """Vérifie si Kafka est connecté"""
-        try:
-            if self.producer:
-                metadata = await self.producer.client.bootstrap()
-                return metadata is not None
-        except:
-            pass
-        return False
-    
-    async def close(self):
-        """Ferme la connexion Kafka"""
-        if self.producer:
-            await self.producer.stop()
-            logger.info("🔴 Producteur Kafka arrêté")
+                print(f"  ➡️ Heure {hour}h: {len(stations)} messages envoyés.")
+                await asyncio.sleep(WAIT_BETWEEN_HOURS)
+
+            print(f"😴 Journée terminée. Attente de {WAIT_BETWEEN_DAYS} secondes...")
+            start_date += timedelta(days=1)
+            await asyncio.sleep(WAIT_BETWEEN_DAYS)
+    except Exception as e:
+        print(f"❌ Erreur durant le streaming: {e}")
+    finally:
+        await producer.stop()
+
+if __name__ == "__main__":
+    asyncio.run(stream_data())
