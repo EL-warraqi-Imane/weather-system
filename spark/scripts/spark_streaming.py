@@ -6,6 +6,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import warnings
+# Ajoute cet import en haut de ton script
+import joblib
+import xgboost as xg
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 # --- CONFIGURATION ---
 KAFKA_BOOTSTRAP = "172.17.11.96:9092"
@@ -38,7 +41,10 @@ files_to_distribute = {
     "scaler_x": str(BASE_DIR / "models" / "scaler_x_transformer.pkl"),
     "scaler_y": str(BASE_DIR / "models" / "scaler_y_transformer.pkl"),
     "model_loader": str(BASE_DIR / "scripts" / "model_loader.py"),
-    "model_arch": str(BASE_DIR / "scripts" / "model_architecture.py")
+    "model_arch": str(BASE_DIR / "scripts" / "model_architecture.py"),
+    "xgb_model": str(BASE_DIR / "classifier" / "XGBoost.pkl"),
+    "xgb_scaler": str(BASE_DIR / "classifier" / "scaler.pkl"),
+    "xgb_le": str(BASE_DIR / "classifier" / "label_encoder.pkl")
 }
 
 # Vérifier et distribuer
@@ -54,6 +60,21 @@ print("="*70 + "\n")
 # Singleton pour le modèle
 _model_holder = None
 
+_xgb_holder = None
+
+def get_xgb_classifier():
+    global _xgb_holder
+    if _xgb_holder is None:
+        from pyspark import SparkFiles
+        import joblib
+        
+        # On utilise les noms de base des fichiers ajoutés avec addFile
+        model_p = SparkFiles.get("XGBoost.pkl")
+        scaler_p = SparkFiles.get("scaler.pkl")
+        le_p = SparkFiles.get("label_encoder.pkl")
+        
+        _xgb_holder = (joblib.load(model_p), joblib.load(scaler_p), joblib.load(le_p))
+    return _xgb_holder
 def get_model():
     """Charge le modèle sur chaque executor"""
     global _model_holder
@@ -103,38 +124,109 @@ def get_model():
             raise
     
     return _model_holder
+def apply_fe_for_xgboost(pred_dict, lat, lon, scaler_xgb):
+    # 1. Création du DataFrame
+    df = pd.DataFrame([pred_dict])
+    
+    # 2. Ajout des colonnes de localisation
+    df['latitude'] = lat
+    df['longitude'] = lon
+    df['occurrence'] = 1  # Valeur par défaut utilisée au training
+    
+    # 3. Ajout des colonnes temporelles (day_sin, day_cos)
+    now = datetime.now()
+    day_of_year = now.timetuple().tm_yday
+    df['day_sin'] = np.sin(2 * np.pi * day_of_year / 365.0)
+    df['day_cos'] = np.cos(2 * np.pi * day_of_year / 365.0)
+    
+    # 4. Compléter les colonnes météo manquantes (non prédites par le GRU)
+    # On utilise des valeurs logiques ou basées sur les prédictions existantes
+    df['apparent_temperature'] = df.get('apparent_temperature', df['temperature_2m'])
+    df['dew_point_2m'] = df.get('dew_point_2m', df['temperature_2m'] - 2)
+    df['rain'] = df.get('rain', df['precipitation']) # Si pas de distinction, rain = precip
+    df['snow_depth'] = 0.0
+    df['wind_direction_10m'] = 180.0 # Valeur neutre
+    df['cloud_cover'] = 50.0
+    df['weather_code'] = 0.0
+    
+    # 5. Calcul des Features Engineering (Strictement identique au training)
+    df['wind_chill_factor'] = df['apparent_temperature'] - df['temperature_2m']
+    df['temp_humidity_index'] = df['temperature_2m'] * df['relative_humidity_2m'] / 100
+    df['pressure_anomaly'] = df['surface_pressure'] - 1013.25
+    df['lat_lon_interaction'] = df['latitude'] * df['longitude']
+    df['distance_from_equator'] = np.abs(df['latitude'])
+    df['is_coastal'] = (np.minimum(np.abs(df['longitude'] + 120), 
+                                    np.abs(df['longitude'] + 75)) < 10).astype(int)
+    df['lat_squared'] = df['latitude'] ** 2
+    df['lon_squared'] = df['longitude'] ** 2
+    df['lat_abs_lon'] = df['latitude'] * np.abs(df['longitude'])
+    df['lat_lon_ratio'] = df['latitude'] / (np.abs(df['longitude']) + 0.001)
+    df['snow_to_precip_ratio'] = df['snowfall'] / (df['precipitation'] + 0.001)
+    df['lat_temp_interaction'] = df['latitude'] * df['temperature_2m']
 
+    # 6. Sélection et réorganisation automatique
+    # On ne garde QUE les colonnes que le scaler connaît, dans le bon ordre
+    X_input = df[scaler_xgb.feature_names_in_]
+    
+    return scaler_xgb.transform(X_input)
 def run_7day_forecast(history, lat, lon):
-    """Génère des prévisions sur 7 jours"""
-    model = get_model()
+    model_gru = get_model()
+    xgb_model, xgb_scaler, xgb_le = get_xgb_classifier() 
+    
     current_seq = history.copy()
     forecast_results = []
-    
     start_time = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     
-    for i in range(24):  # 7 jours
+    for i in range(24): # Prévision sur 24h
         target_time = start_time + timedelta(hours=i)
         
-        input_data = model.prepare_input_sequence(current_seq[-24:], target_time, lat, lon)
-        pred = model.predict(input_data)
+        # 1. Prédiction GRU
+        input_data = model_gru.prepare_input_sequence(current_seq[-24:], target_time, lat, lon)
+        pred = model_gru.predict(input_data)
         
+        # 2. Préparation des données pour XGBoost
+        gru_output = {
+            'temperature_2m': float(pred['temperature_2m']),
+            'relative_humidity_2m': float(pred['relative_humidity_2m']),
+            'surface_pressure': float(pred['surface_pressure']),
+            'wind_speed_10m': float(pred['wind_speed_10m']),
+            'wind_gusts_10m': float(pred['wind_gusts_10m']),
+            'precipitation': float(pred['precipitation']),
+            'snowfall': float(pred['snowfall']),
+            'soil_moisture_0_to_7cm': float(pred['soil_moisture_0_to_7cm'])
+        }
+
+        X_features = apply_fe_for_xgboost(gru_output, lat, lon, xgb_scaler)
+        
+        # 3. Classification XGBoost & Confiance
+        # predict_proba renvoie une liste de listes [[prob_cl1, prob_cl2, ...]]
+        probabilities = xgb_model.predict_proba(X_features)[0] 
+        event_idx = np.argmax(probabilities) # Index de la classe la plus probable
+        confidence = float(np.max(probabilities)) # Score de confiance (ex: 0.85)
+        
+        event_name = xgb_le.inverse_transform([event_idx])[0]
+
+        # 4. Stockage du résultat complet avec CONFIDENCE
         forecast_results.append({
             "latitude": float(lat),
             "longitude": float(lon),
             "target_timestamp": target_time,
-            "predicted_temperature": float(pred['temperature_2m']),
-            "predicted_humidity": float(pred['relative_humidity_2m']),
-            "predicted_pressure": float(pred['surface_pressure']),
-            "predicted_wind_speed": float(pred['wind_speed_10m']),
-            "predicted_wind_gusts": float(pred['wind_gusts_10m']),
-            "predicted_precipitation": float(pred['precipitation']),
-            "predicted_snowfall": float(pred['snowfall']),
-            "predicted_soil_moisture": float(pred['soil_moisture_0_to_7cm']),
+            "predicted_temperature": gru_output['temperature_2m'],
+            "predicted_humidity": gru_output['relative_humidity_2m'],
+            "predicted_pressure": gru_output['surface_pressure'],      # ✅ AJOUTÉ
+            "predicted_wind_speed": gru_output['wind_speed_10m'],      # ✅ AJOUTÉ
+            "predicted_wind_gusts": gru_output['wind_gusts_10m'],      # ✅ AJOUTÉ
+            "predicted_precipitation": gru_output['precipitation'],    # ✅ AJOUTÉ
+            "predicted_snowfall": gru_output['snowfall'],              # ✅ AJOUTÉ
+            "predicted_soil_moisture": gru_output['soil_moisture_0_to_7cm'], # ✅ AJOUTÉ
+            "predicted_event": event_name,
+            "confidence_score": confidence,
             "created_at": datetime.now(),
-            "model_version": "gru-v1-bigdata"
+            "model_version": "gru-xgboost-v1"
         })
         
-        new_point = {
+        # Mise à jour de la séquence pour t+1
+        current_seq.append({
             'temperature': pred['temperature_2m'],
             'humidity': pred['relative_humidity_2m'],
             'pressure': pred['surface_pressure'],
@@ -143,11 +235,9 @@ def run_7day_forecast(history, lat, lon):
             'precipitation': pred['precipitation'],
             'snowfall': pred['snowfall'],
             'soil_moisture': pred['soil_moisture_0_to_7cm']
-        }
-        current_seq.append(new_point)
+        })
     
     return forecast_results
-
 def process_batch(batch_df, batch_id):
     all_historical_records = []
     print(f"\n{'='*70}")
@@ -224,18 +314,6 @@ def process_batch(batch_df, batch_id):
             print(f" ❌ Erreur prédiction Station ({row['latitude']}): {e}")
 
     # --- INSERTION EN BASE DE DONNÉES ---
-    # Requête pour historical_data
-    history_query = """
-                INSERT INTO historical_data (
-                    simulation_id, sequence_index, target_date, latitude, longitude,
-                    temperature, humidity, pressure, wind_speed, wind_gusts,
-                    precipitation, snowfall, soil_moisture
-                ) VALUES (
-                    %(simulation_id)s, %(sequence_index)s, %(target_date)s, %(latitude)s, %(longitude)s,
-                    %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
-                    %(precipitation)s, %(snowfall)s, %(soil_moisture)s
-                )
-            """
             
     # --- INSERTION EN BASE DE DONNÉES ---
     if all_historical_records or all_forecasts or all_analyses:
@@ -273,14 +351,19 @@ def process_batch(batch_df, batch_id):
                     latitude, longitude, target_timestamp, predicted_temperature, 
                     predicted_humidity, predicted_pressure, predicted_wind_speed, 
                     predicted_wind_gusts, predicted_precipitation, predicted_snowfall, 
-                    predicted_soil_moisture, created_at, model_version
+                    predicted_soil_moisture, predicted_event, confidence_score, 
+                    created_at, model_version
                 ) VALUES (
                     %(latitude)s, %(longitude)s, %(target_timestamp)s, %(predicted_temperature)s,
                     %(predicted_humidity)s, %(predicted_pressure)s, %(predicted_wind_speed)s,
                     %(predicted_wind_gusts)s, %(predicted_precipitation)s, %(predicted_snowfall)s,
-                    %(predicted_soil_moisture)s, %(created_at)s, %(model_version)s
+                    %(predicted_soil_moisture)s, %(predicted_event)s, %(confidence_score)s,
+                    %(created_at)s, %(model_version)s
                 ) ON CONFLICT (latitude, longitude, target_timestamp) DO UPDATE SET 
-                predicted_temperature = EXCLUDED.predicted_temperature, created_at = EXCLUDED.created_at;
+                predicted_temperature = EXCLUDED.predicted_temperature,
+                predicted_event = EXCLUDED.predicted_event,
+                confidence_score = EXCLUDED.confidence_score,
+                created_at = EXCLUDED.created_at;
             """
             if all_forecasts:
                 cur.executemany(forecast_query, all_forecasts)
@@ -308,6 +391,29 @@ def process_batch(batch_df, batch_id):
             if conn: 
                 cur.close()
                 conn.close()
+def transform_gru_to_xgboost(prediction_dict, scaler):
+    # 1. Création du DataFrame à partir de la sortie GRU
+    df_pred = pd.DataFrame([prediction_dict])
+    
+    # 2. Feature Engineering (Strictement identique à ton training)
+    df_pred['wind_chill_factor'] = df_pred['apparent_temperature'] - df_pred['temperature_2m']
+    df_pred['temp_humidity_index'] = df_pred['temperature_2m'] * df_pred['relative_humidity_2m'] / 100
+    df_pred['pressure_anomaly'] = df_pred['surface_pressure'] - 1013.25 # On utilise la moyenne standard si pas de mean()
+    df_pred['lat_lon_interaction'] = df_pred['latitude'] * df_pred['longitude']
+    df_pred['distance_from_equator'] = np.abs(df_pred['latitude'])
+    df_pred['is_coastal'] = (np.minimum(np.abs(df_pred['longitude'] + 120), np.abs(df_pred['longitude'] + 75)) < 10).astype(int)
+    df_pred['lat_squared'] = df_pred['latitude'] ** 2
+    df_pred['lon_squared'] = df_pred['longitude'] ** 2
+    df_pred['lat_abs_lon'] = df_pred['latitude'] * np.abs(df_pred['longitude'])
+    df_pred['lat_lon_ratio'] = df_pred['latitude'] / (np.abs(df_pred['longitude']) + 0.001)
+    df_pred['snow_to_precip_ratio'] = df_pred['snowfall'] / (df_pred['precipitation'] + 0.001)
+    df_pred['lat_temp_interaction'] = df_pred['latitude'] * df_pred['temperature_2m']
+
+    # 3. Scaling
+    # /!\ Attention : Assure-toi que les colonnes sont dans le même ordre que X_train
+    X_scaled = scaler.transform(df_pred)
+    
+    return X_scaled
 schema = StructType([
     StructField("latitude", DoubleType()),
     StructField("longitude", DoubleType()),
