@@ -433,3 +433,24 @@ class DatabaseService:
      except Exception as e:
         print(f"Erreur DB: {e}")
         return []
+    @classmethod
+    async def get_station_stats(cls, station_id: int, days: int = 7):
+     try:
+        async with cls._pool.acquire() as conn:
+            query = """
+            SELECT 
+                analysis_date as date,
+                avg_temp,
+                max_wind_speed,
+                total_precipitation,
+                humidity_trend
+            FROM station_daily_summary
+            WHERE station_id = $1
+            AND analysis_date > CURRENT_DATE - make_interval(days => $2)
+            ORDER BY analysis_date ASC;
+            """
+            rows = await conn.fetch(query, station_id, days)
+            return [dict(r) for r in rows]
+     except Exception as e:
+        print(f"Erreur SQL stats station: {e}")
+        return []

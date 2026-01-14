@@ -12,7 +12,7 @@ KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 TOPIC_NAME = "weather-raw-data"
 
 # Paramètres de simulation
-WAIT_BETWEEN_DAYS = 60  # Attente de 60 secondes après avoir envoyé 24h de données
+WAIT_BETWEEN_DAYS = 180  # Attente de 60 secondes après avoir envoyé 24h de données
 WAIT_BETWEEN_HOURS = 0.5 # Petit délai pour ne pas saturer Kafka instantanément (0.5s)
 
 def get_temporal_features(specific_dt):

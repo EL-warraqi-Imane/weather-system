@@ -169,15 +169,16 @@ def apply_fe_for_xgboost(pred_dict, lat, lon, scaler_xgb):
     X_input = df[scaler_xgb.feature_names_in_]
     
     return scaler_xgb.transform(X_input)
-def run_7day_forecast(history, lat, lon):
+def run_7day_forecast(history, lat, lon,reference_time):
     model_gru = get_model()
     xgb_model, xgb_scaler, xgb_le = get_xgb_classifier() 
     
     current_seq = history.copy()
     forecast_results = []
-    start_time = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    
-    for i in range(168): # Prévision sur 24h
+    # start_time = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    # On commence à l'heure suivant la dernière donnée reçue
+    start_time = reference_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)    
+    for i in range(48): # Prévision sur 24h
         target_time = start_time + timedelta(hours=i)
         
         # 1. Prédiction GRU
@@ -307,9 +308,29 @@ def process_batch(batch_df, batch_id):
         })
         
         # --- PARTIE PRÉDICTION ---
+        # --- PARTIE PRÉDICTION ---
         try:
-            station_forecasts = run_7day_forecast(history, row['latitude'], row['longitude'])
-            all_forecasts.extend(station_forecasts)
+            if clean_history:
+                # On récupère le timestamp le plus récent
+                last_data_time = __builtins__.max([x['timestamp'] for x in clean_history])
+                
+                if isinstance(last_data_time, str):
+                    # ✅ REMPLACE strptime PAR CETTE LIGNE :
+                    # On remplace le 'T' par un espace si nécessaire, ou on utilise fromisoformat
+                    try:
+                        # Nettoyage pour gérer le 'T' et les microsecondes
+                        ts_clean = last_data_time.replace('T', ' ')
+                        # On ne garde que les 19 premiers caractères (YYYY-MM-DD HH:MM:SS) 
+                        # pour ignorer les microsecondes qui font bugger start_time
+                        reference_dt = datetime.strptime(ts_clean[:19], '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        reference_dt = datetime.fromisoformat(last_data_time)
+                else:
+                    reference_dt = last_data_time
+
+                # Appel de la prédiction
+                station_forecasts = run_7day_forecast(history, row['latitude'], row['longitude'], reference_dt)
+                all_forecasts.extend(station_forecasts)
         except Exception as e:
             print(f" ❌ Erreur prédiction Station ({row['latitude']}): {e}")
 
