@@ -11,7 +11,7 @@ import joblib
 import xgboost as xg
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 # --- CONFIGURATION ---
-KAFKA_BOOTSTRAP = "172.17.11.96:9092"
+KAFKA_BOOTSTRAP = "localhost:9092"
 DB_URL = "jdbc:postgresql://localhost:5555/weather"
 DB_PROPS = {"user": "admin", "password": "admin123", "driver": "org.postgresql.Driver"}
 
@@ -351,22 +351,21 @@ def process_batch(batch_df, batch_id):
             
             # 1. Insertion des données HISTORIQUES
             history_query = """
-    INSERT INTO historical_data (
-        simulation_id, sequence_index, target_date, latitude, longitude,
-        temperature, humidity, pressure, wind_speed, wind_gusts,
-        precipitation, snowfall, soil_moisture
-    ) VALUES (
-        %(simulation_id)s, %(sequence_index)s, %(target_date)s, %(latitude)s, %(longitude)s,
-        %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
-        %(precipitation)s, %(snowfall)s, %(soil_moisture)s
-    )
-     ON CONFLICT (latitude, longitude, target_date, sequence_index) DO NOTHING
+            INSERT INTO historical_data (
+                simulation_id, sequence_index, target_date, latitude, longitude,
+                temperature, humidity, pressure, wind_speed, wind_gusts,
+                precipitation, snowfall, soil_moisture
+            ) VALUES (
+                %(simulation_id)s, %(sequence_index)s, %(target_date)s, %(latitude)s, %(longitude)s,
+                %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
+                %(precipitation)s, %(snowfall)s, %(soil_moisture)s
+            )
             """
             if all_historical_records:
                 cur.executemany(history_query, all_historical_records)
                 print(f"✅ {len(all_historical_records)} points historiques sauvegardés.")
 
-            # 2. Insertion des PRÉDICTIONS
+# 2. Insertion des PRÉDICTIONS
             forecast_query = """
                 INSERT INTO weekly_forecasts (
                     latitude, longitude, target_timestamp, predicted_temperature, 
@@ -380,11 +379,13 @@ def process_batch(batch_df, batch_id):
                     %(predicted_wind_gusts)s, %(predicted_precipitation)s, %(predicted_snowfall)s,
                     %(predicted_soil_moisture)s, %(predicted_event)s, %(confidence_score)s,
                     %(created_at)s, %(model_version)s
-                ) ON CONFLICT (latitude, longitude, target_timestamp) DO UPDATE SET 
-                predicted_temperature = EXCLUDED.predicted_temperature,
-                predicted_event = EXCLUDED.predicted_event,
-                confidence_score = EXCLUDED.confidence_score,
-                created_at = EXCLUDED.created_at;
+                ) 
+                ON CONFLICT ON CONSTRAINT "weekly_forecasts_latitude_longitude_target_timestamp_key"
+                DO UPDATE SET 
+                    predicted_temperature = EXCLUDED.predicted_temperature,
+                    predicted_event = EXCLUDED.predicted_event,
+                    confidence_score = EXCLUDED.confidence_score,
+                    created_at = EXCLUDED.created_at;
             """
             if all_forecasts:
                 cur.executemany(forecast_query, all_forecasts)

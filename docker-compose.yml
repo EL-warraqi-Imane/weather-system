@@ -1,87 +1,13 @@
+version: '3.8'
+
 services:
-  # Zookeeper (requis pour Kafka)
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
-
-  # Kafka Broker
-  kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 9092"]
-      interval: 20s
-      timeout: 10s
-      retries: 10
-      start_period: 40s
-
-
-  # Backend FastAPI avec PyTorch
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=weather
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin123
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MODEL_PATH=/app/models/best_transformer_weather.pth
-      - SCALER_X_PATH=/app/models/scaler_x_transformer.pkl
-      - SCALER_Y_PATH=/app/models/scaler_y_transformer.pkl
-      - DEVICE=cpu  # ou cuda si GPU disponible
-    volumes:
-      - ./backend/app:/app/app
-      - ./backend/models:/app/models
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Spark Streaming
-  spark:
-    build: ./spark
-    ports:
-      - "8080:8080"
-      - "7077:7077"
-    environment:
-      - SPARK_MODE=master
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - POSTGRES_JDBC_URL=jdbc:postgresql://postgres:5432/weather
-    volumes:
-      - ./spark/scripts:/opt/spark/scripts
-    depends_on:
-      - kafka
-      - postgres
-
-  # PostgreSQL
+  # -----------------------------------------------------------------
+  # 1. POSTGRESQL (Intact, comme demandé)
+  # Accessible via localhost:5555
+  # -----------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
+    container_name: postgres_weather
     environment:
       POSTGRES_DB: weather
       POSTGRES_USER: admin
@@ -90,6 +16,7 @@ services:
       - "5555:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Assure-toi que ce fichier existe ou retire cette ligne si tu n'en as pas
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin"]
@@ -97,39 +24,58 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis
-  redis:
-    image: redis:7-alpine
+  # -----------------------------------------------------------------
+  # 2. ZOOKEEPER (Obligatoire pour Kafka)
+  # -----------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
     ports:
-      - "6379:6379"
-    volumes:
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf
+      - "2181:2181"
+
+  # -----------------------------------------------------------------
+  # 3. KAFKA (FIXÉ)
+  # Double Listener : 
+  # - Port 9092 : Pour ton script Python sur Windows (localhost)
+  # - Port 29092 : Pour les conteneurs internes (Docker)
+  # -----------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Configuration magique pour Windows + Docker
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
 
-  # Frontend Angular
-  frontend:
-    build: ./frontend
-    ports:
-      - "4200:80"
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/usr/share/nginx/html
-    restart: unless-stopped
-
-  # Kafka UI (Monitoring)
+  # -----------------------------------------------------------------
+  # 4. KAFKA UI (Optionnel mais très utile)
+  # Accessible via http://localhost:8081
+  # -----------------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
+    container_name: kafka_ui
     ports:
       - "8081:8080"
     environment:
       - KAFKA_CLUSTERS_0_NAME=local
-      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
       - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
     depends_on:
       - kafka
