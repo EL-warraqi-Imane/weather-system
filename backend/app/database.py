@@ -388,13 +388,18 @@ class DatabaseService:
                     predicted_humidity as humidity,
                     predicted_pressure as pressure,
                     predicted_wind_speed as wind_speed,
-                    predicted_precipitation as precipitation
+                    predicted_precipitation as precipitation,
+                    predicted_wind_gusts as wind_gusts_10m,
+                    predicted_precipitation as precipitation,
+                    predicted_snowfall as snowfall,
+                   predicted_soil_moisture as soil_moisture_0_to_7cm
+            
                 FROM weekly_forecasts
                 WHERE ABS(latitude - $1::numeric) < 0.0001 
                   AND ABS(longitude - $2::numeric) < 0.0001
                   AND target_timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
                 ORDER BY target_timestamp ASC
-                LIMIT 24;
+                ;
             """
                 rows = await conn.fetch(query, lat, lon)
                 
@@ -426,7 +431,7 @@ class DatabaseService:
               AND ABS(longitude - $2::numeric) < 0.0001
               AND target_timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
             ORDER BY target_timestamp ASC
-            LIMIT 168; -- On prend 7 jours (168h) pour avoir la timeline complète
+            ; -- On prend 7 jours (168h) pour avoir la timeline complète
             """
             rows = await conn.fetch(query, lat, lon)
             return [dict(row) for row in rows]

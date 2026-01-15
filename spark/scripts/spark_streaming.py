@@ -11,7 +11,7 @@ import joblib
 import xgboost as xg
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 # --- CONFIGURATION ---
-KAFKA_BOOTSTRAP = "localhost:9092"
+KAFKA_BOOTSTRAP = "172.17.11.96:9092"
 DB_URL = "jdbc:postgresql://localhost:5555/weather"
 DB_PROPS = {"user": "admin", "password": "admin123", "driver": "org.postgresql.Driver"}
 
@@ -360,6 +360,17 @@ def process_batch(batch_df, batch_id):
                 %(temperature)s, %(humidity)s, %(pressure)s, %(wind_speed)s, %(wind_gusts)s,
                 %(precipitation)s, %(snowfall)s, %(soil_moisture)s
             )
+            ON CONFLICT (latitude, longitude, target_date, sequence_index) 
+            DO UPDATE SET 
+                simulation_id = EXCLUDED.simulation_id,
+                temperature = EXCLUDED.temperature,
+                humidity = EXCLUDED.humidity,
+                pressure = EXCLUDED.pressure,
+                wind_speed = EXCLUDED.wind_speed,
+                wind_gusts = EXCLUDED.wind_gusts,
+                precipitation = EXCLUDED.precipitation,
+                snowfall = EXCLUDED.snowfall,
+                soil_moisture = EXCLUDED.soil_moisture;
             """
             if all_historical_records:
                 cur.executemany(history_query, all_historical_records)
@@ -466,7 +477,7 @@ df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP) \
     .option("subscribe", "weather-raw-data") \
-    .option("startingOffsets", "latest") \
+    .option("startingOffsets", "earliest") \
     .option("failOnDataLoss", "false") \
     .load()
 
@@ -477,7 +488,7 @@ parsed_df = df.select(
 parsed_df = parsed_df.withColumn("event_time", to_timestamp(col("timestamp")))
 
 windowed_df = parsed_df \
-    .withWatermark("event_time", "10 minutes") \
+    .withWatermark("event_time", "25 hours") \
     .groupBy(
         "latitude", 
         "longitude",
@@ -502,7 +513,7 @@ windowed_df = parsed_df \
 query = windowed_df.writeStream \
     .foreachBatch(process_batch) \
     .outputMode("update") \
-    .trigger(processingTime='1 minute') \
+    .trigger(processingTime='7 minute') \
     .start()
 
 print("✅ Streaming démarré. En attente de données...\n")
